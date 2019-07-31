@@ -8,7 +8,7 @@ class BanditSimulator(object):
     def __init__(self, reward_probabilities):
         self.reward_probabilities = reward_probabilities
 
-    def pull(self, bandit_index):
+    def pull(self, bandit_index, environment):
         reward_probability = self.reward_probabilities[bandit_index]
         reward_tensor = tensor([1 - reward_probability, reward_probability])
         reward = sample('arm'+str(bandit_index), dist.Categorical(reward_tensor))
