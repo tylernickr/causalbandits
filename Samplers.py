@@ -52,11 +52,10 @@ class StandardThomspon(object):
             self.trials[choice] += 1
             bb_score[k] = result
             self.N += 1
-            choices[k] = choice
+            self.choices.append(choice)
+            self.observed_envs.append(observed_env)
 
         self.bb_score.append(bb_score)  # Note that each time we pull more arms, we append the results
-        self.choices.append(choices)  # If we want to re-run the algo, the results will be appended
-        self.observed_envs.append(observed_env)
 
     def initialize(self):  # if we want to re-run the algorithm from scratch
 
@@ -89,6 +88,7 @@ class CausalThomspon(object):
           np.array([np.zeros(n_bandits), np.zeros(n_bandits)])
         ])
         self.N = 0
+        self.observed_envs = []
         self.choices = []
         self.bb_score = []
 
@@ -116,15 +116,23 @@ class CausalThomspon(object):
             self.trials[drunk][blinking][choice] += 1
             bb_score[k] = result
             self.N += 1
-            choices[k] = choice
+            self.choices.append(choice)
+            self.observed_envs.append(observed_env)
 
         self.bb_score = self.bb_score.append(bb_score)  # Note that each time we pull more arms, we append the results
-        self.choices = self.choices.append(choices)  # If we want to re-run the algo, the results will be appended
 
     def initialize(self):  # if we want to re-run the algorithm from scratch
         n_bandits = len(self.bandits)
-        self.wins = np.zeros(n_bandits)
-        self.trials = np.zeros(n_bandits)
+        self.wins = np.array([
+          np.array([np.zeros(n_bandits), np.zeros(n_bandits)]),
+          np.array([np.zeros(n_bandits), np.zeros(n_bandits)])
+        ])
+        self.trials = np.array([
+          np.array([np.zeros(n_bandits), np.zeros(n_bandits)]),
+          np.array([np.zeros(n_bandits), np.zeros(n_bandits)])
+        ])
         self.N = 0
         self.choices = []
         self.bb_score = []
+        self.observed_envs = []
+
