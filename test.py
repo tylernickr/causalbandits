@@ -21,7 +21,7 @@ if __name__ == '__main__':
     simulator = ConfoundingBanditSimulator(bandit_probs)
 
     agent = CausalThomspon(simulator, env)
-    agent.sample_bandits(1000)
+    agent.sample_bandits(500)
     print(agent.choices)
     print(agent.wins.sum() / agent.trials.sum())
 

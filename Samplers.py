@@ -1,10 +1,20 @@
 import numpy as np
 from pyro import sample
 import pyro.distributions as dist
-from torch import tensor
+from time import time
+
+DRUNK = 'drunk'
+BLINKING = 'blinking'
 
 
 class BaseSampler(object):
+    """
+    A base class with standard methods used by more complex samplers.
+
+    parameters:
+    bandits: a bandit class with .pull method
+    environment: an environment that can be .observe for variables
+    """
 
     @staticmethod
     def _get_init_array(n):
@@ -28,51 +38,39 @@ class BaseSampler(object):
         self.current_scores = []
         self.observed_envs = []
 
+    def update_parameters(self, choice, result, observed_env):
+        self._update_wins_trials(choice, result, observed_env)
+        self.current_scores.append(result)
+        self.N += 1
+        self.choices.append(choice)
+        self.observed_envs.append(observed_env)
+
+    def _update_wins_trials(self, choice, result, observed_env):
+        self.wins[choice] += result
+        self.trials[choice] += 1
+
     def sample_bandits(self, n=1):
         for k in range(n):
             self._pull_bandit()
 
     def _pull_bandit(self):
-        # This method will do nothing in the base class
-        # Implement it in actual implementations of BaseSampler
-        pass
+        observed_env = self.environment.observe()
+        choice = self._select_arm(observed_env)
+        result = self.bandits.pull(choice, observed_env)
+        self.update_parameters(choice, result, observed_env)
+
+    def _select_arm(self, observed_env):
+        return 0
 
 
 class StandardThomspon(BaseSampler):
-    """
-    Standard Thompson Sampling.
 
-    parameters:
-    bandits: a bandit class with .pull method
-
-    methods:
-    sample_bandits(n): sample and train on n pulls.
-    initialize():  reset these variables to their blank states, if we want to re-run the algorithm
-    
-    attributes:
-    N: the cumulative number of samples
-    choices: the current choices as an (N,) array
-    current_scores: the current scores as an (N,) array
-    """
-    def _pull_bandit(self):
-        # get env for this round
-        observed_env = self.environment.observe()
-
-        # sample from bandit probabilities priors and choose bandit that maximizes its Beta distr.
-        choice = np.argmax(
-            [sample('arm' + str(i), dist.Beta(1 + self.wins[i], 1 + self.trials[i] - self.wins[i])) for i in
-             range(len(self.bandits))])
-
-        # sample the chosen bandit
-        result = self.bandits.pull(choice, observed_env)
-
-        # update priors and score
-        self.wins[choice] += result
-        self.trials[choice] += 1
-        self.current_scores.append(result)
-        self.N += 1
-        self.choices.append(choice)
-        self.observed_envs.append(observed_env)
+    def _select_arm(self, observed_env):
+        choice = np.argmax([
+                sample('arm' + str(i), dist.Beta(1 + self.wins[i], 1 + self.trials[i] - self.wins[i]))
+                for i in range(len(self.bandits))
+            ])
+        return choice
 
 
 class CausalThomspon(BaseSampler):
@@ -84,51 +82,53 @@ class CausalThomspon(BaseSampler):
             np.array([np.zeros(n), np.zeros(n)])
         ])
 
-    def cond_prob_y(self, *args):
-        # Calculate the prob of Y=1 given the conditional: X=x (Drunk = d, and Blinking = b)
-        if len(args) == 1:  # meanining only condition on x
-            x = args[0]
+    def _update_wins_trials(self, choice, result, observed_env):
+        drunk = observed_env[DRUNK]
+        blinking = observed_env[BLINKING]
+        self.wins[drunk][blinking][choice] += result
+        self.trials[drunk][blinking][choice] += 1
+
+    # Calculate the prob of Y=1 given the conditional: X=x (Drunk = d, and Blinking = b)
+    def _cond_prob_y(self, x, d=-1, b=-1):
+        if d == b == -1:  # meanining only condition on x
             y_vals = [self.current_scores[i] for i, x_val in enumerate(self.choices) if x_val == x]
         else:
-            x, d, b = args
             y_vals = [self.current_scores[i] for i, (x_val, env) in enumerate(zip(self.choices, self.observed_envs))
-                      if x_val == x and env['drunk'] == d and env['blinking'] == b]
+                      if x_val == x and env[DRUNK] == d and env[BLINKING] == b]
+
         if len(y_vals) == 0:
             return 0
         else:
-            prob = sum(y_vals) / len(y_vals)
-            return prob
+            return sum(y_vals) / len(y_vals)
 
-    def cond_prob_db(self, d, b, x):
-        # Calculate the prob of Drunk=d & Blink=b given the conditional: X=x
+    # Calculate the prob of Drunk=d & Blink=b given the conditional: X=x
+    def _cond_prob_db(self, d, b, x):
         no_events = np.sum([1 for i, (x_val, env) in enumerate(zip(self.choices, self.observed_envs))
-                            if x_val == x and env['drunk'] == d and env['blinking'] == b])
+                            if x_val == x and env[DRUNK] == d and env[BLINKING] == b])
         no_outcomes = np.sum([1 for i, x_val in enumerate(self.choices) if x_val == x])
 
         if no_outcomes == 0:
             return 0
         else:
-            prob = no_events / no_outcomes
-            return prob
+            return no_events / no_outcomes
 
-    def _pull_bandit(self):
-        # get env for this round
-        observed_env = self.environment.observe()
-        drunk = observed_env['drunk']
-        blinking = observed_env['blinking']
+    def _select_arm(self, observed_env):
+        # Get environment variables that we care about
+        drunk = observed_env[DRUNK]
+        blinking = observed_env[BLINKING]
 
         # Get the intuition for this trial:
         # Based on Bareinboim et. al., this is just the xor function of drunk and blinking
-        intuition = tensor(int(bool(drunk) ^ bool(blinking)))  # xor(drunk, blinking)
+        intuition = int(bool(drunk) ^ bool(blinking))  # xor(drunk, blinking)
 
         # Estimate the payout for the counter-intuition: E(Y_(X=x')|X=x)
         counter_intuition = abs(intuition - 1)
-        Q1 = np.sum([self.cond_prob_y(counter_intuition, drunk_val, blink_val)
-                     * self.cond_prob_db(drunk_val, blink_val, counter_intuition)
+        Q1 = np.sum([self._cond_prob_y(counter_intuition, drunk_val, blink_val)
+                     * self._cond_prob_db(drunk_val, blink_val, counter_intuition)
                      for drunk_val in [0, 1] for blink_val in [0, 1]])
 
         # Estimate the payout for the intuition (posterior predictive): P(y|X=x)
-        Q2 = self.cond_prob_y(intuition)
+        Q2 = self._cond_prob_y(intuition)
 
         w = [1, 1]  # initialize weights (per the paper)
         bias = 1 - abs(Q1 - Q2)  # weighting strength (per the paper)
@@ -144,7 +144,7 @@ class CausalThomspon(BaseSampler):
         env_given_intuition = [[drunk, blinking],
                                [abs(drunk - 1), abs(blinking - 1)]]
 
-        # Thus, env_given_intuitio[k] corresponds to the drunk&blink values
+        # Thus, env_given_intuition[k] corresponds to the drunk&blink values
         # that yield that intuition
         wins = sum([self.wins[drunk][blinking] for drunk, blinking in env_given_intuition])
         trials = sum([self.trials[drunk][blinking] for drunk, blinking in env_given_intuition])
@@ -155,17 +155,7 @@ class CausalThomspon(BaseSampler):
         choice = np.argmax([sample('arm1', dist.Beta(alpha[0], beta[0])) * w[0],
                             sample('arm2', dist.Beta(alpha[1], beta[1])) * w[1]])
 
-        # sample the chosen bandit
-        result = self.bandits.pull(choice, observed_env)
-
-        # update priors and score
-        self.wins[drunk][blinking][choice] += result
-        self.trials[drunk][blinking][choice] += 1
-        self.current_scores.append(result)
-        self.N += 1
-        self.choices.append(choice)
-        self.observed_envs.append(observed_env)
-
+        return choice
 
 
 
