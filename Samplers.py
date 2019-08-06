@@ -1,5 +1,6 @@
 import numpy as np
 from pyro import sample
+from pyro import do
 import pyro.distributions as dist
 from time import time
 
@@ -55,13 +56,15 @@ class BaseSampler(object):
 
     def _pull_bandit(self):
         observed_env = self.environment.observe()
-        choice = self._select_arm(observed_env)
-        result = self.bandits.pull(choice, observed_env)
-        self.update_parameters(choice, result, observed_env)
+        algo_choice = self._select_arm(observed_env)
+        model = self.bandits.gambler_model
+        intervention_model = do(model, {'arm':algo_choice})
+        result = intervention_model(observed_env)
+        self.update_parameters(algo_choice, result, observed_env)
 
     def _select_arm(self, observed_env):
         return 0
-
+    
 
 class StandardThomspon(BaseSampler):
 
@@ -88,7 +91,7 @@ class CausalThomspon(BaseSampler):
         self.wins[drunk][blinking][choice] += result
         self.trials[drunk][blinking][choice] += 1
 
-    # Calculate the prob of Y=1 given the conditional: X=x (Drunk = d, and Blinking = b)
+    # Calculate P(Y=1 | X=x, Drunk = d, Blinking = b)
     def _cond_prob_y(self, x, d=-1, b=-1):
         if d == b == -1:  # meanining only condition on x
             y_vals = [self.current_scores[i] for i, x_val in enumerate(self.choices) if x_val == x]
@@ -101,7 +104,7 @@ class CausalThomspon(BaseSampler):
         else:
             return sum(y_vals) / len(y_vals)
 
-    # Calculate the prob of Drunk=d & Blink=b given the conditional: X=x
+    # Calculate P(Drunk=d & Blink=b | X=x)
     def _cond_prob_db(self, d, b, x):
         no_events = np.sum([1 for i, (x_val, env) in enumerate(zip(self.choices, self.observed_envs))
                             if x_val == x and env[DRUNK] == d and env[BLINKING] == b])
