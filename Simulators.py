@@ -33,11 +33,10 @@ class ConfoundingBanditSimulator(object):
 
         # Get Reward
         reward_probability = self.reward_probabilities[arm][drunk][blinking]
-        reward = sample('reward',dist.Bernoulli(reward_probability))
+        reward = sample('reward', dist.Bernoulli(reward_probability))
 
         return reward
 
-    
     def __len__(self):
         return len(self.reward_probabilities)
 
