@@ -67,17 +67,26 @@ class BaseSampler(object):
     
 
 class StandardThomspon(BaseSampler):
-
+    """
+    Standard Thompson Sampling that returns arm choice.
+    parameters: BaseSampler        
+    
+    """
     def _select_arm(self, observed_env):
-        choice = np.argmax([
-                sample('arm' + str(i), dist.Beta(1 + self.wins[i], 1 + self.trials[i] - self.wins[i]))
-                for i in range(len(self.bandits))
-            ])
+        alpha = 1 + self.wins
+        beta = 1 + self.trials - self.wins
+        
+        choice = np.argmax([alpha[0]/(alpha[0]+beta[0]), alpha[1]/(alpha[1]+beta[1])])
+                            
         return choice
 
 
 class CausalThomspon(BaseSampler):
-
+    """
+    Causal Thompson Sampling that returns arm choice.
+    parameters: BaseSampler     
+    
+    """
     @staticmethod
     def _get_init_array(n):
         return np.array([
@@ -121,20 +130,19 @@ class CausalThomspon(BaseSampler):
         blinking = observed_env[BLINKING]
 
         # Get the intuition for this trial:
-        # Based on Bareinboim et. al., this is just the xor function of drunk and blinking
         intuition = int(bool(drunk) ^ bool(blinking))  # xor(drunk, blinking)
 
         # Estimate the payout for the counter-intuition: E(Y_(X=x')|X=x)
         counter_intuition = abs(intuition - 1)
         Q1 = np.sum([self._cond_prob_y(counter_intuition, drunk_val, blink_val)
-                     * self._cond_prob_db(drunk_val, blink_val, counter_intuition)
+                     * self._cond_prob_db(drunk_val, blink_val, intuition)
                      for drunk_val in [0, 1] for blink_val in [0, 1]])
 
         # Estimate the payout for the intuition (posterior predictive): P(y|X=x)
         Q2 = self._cond_prob_y(intuition)
 
-        w = [1, 1]  # initialize weights (per the paper)
-        bias = 1 - abs(Q1 - Q2)  # weighting strength (per the paper)
+        w = [1, 1]  # initialize weights 
+        bias = 1 - abs(Q1 - Q2)  # 1-ETT (weight strength)
 
         if Q1 > Q2:
             w[intuition] = bias  # per the paper
@@ -142,21 +150,24 @@ class CausalThomspon(BaseSampler):
             w[counter_intuition] = bias
 
         # Get the #successes and # failures for each machine given the intuition:
+        
         # Since we store the successes as wins[drunk][blinking] I want to get the possible drunkess and
         # blinkness that would yield our intuition (2 posibilities since we are doing inverse of xor)
         env_given_intuition = [[drunk, blinking],
                                [abs(drunk - 1), abs(blinking - 1)]]
-
         # Thus, env_given_intuition[k] corresponds to the drunk&blink values
         # that yield that intuition
+        
         wins = sum([self.wins[drunk][blinking] for drunk, blinking in env_given_intuition])
         trials = sum([self.trials[drunk][blinking] for drunk, blinking in env_given_intuition])
         alpha = 1 + wins
         beta = 1 + trials - wins
 
         # Choose arm:
-        choice = np.argmax([sample('arm1', dist.Beta(alpha[0], beta[0])) * w[0],
-                            sample('arm2', dist.Beta(alpha[1], beta[1])) * w[1]])
+        #choice = np.argmax([sample('arm1', dist.Beta(alpha[0], beta[0])) * w[0],
+        #                   sample('arm2', dist.Beta(alpha[1], beta[1])) * w[1]])
+        
+        choice = np.argmax([w[0]*alpha[0]/(alpha[0]+beta[0]), w[1]*alpha[1]/(alpha[1]+beta[1])])
 
         return choice
 
